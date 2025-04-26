@@ -1,15 +1,55 @@
 name: Trigger Auto-Cancel Function
+
 on:
   schedule:
     - cron: '*/5 * * * *'  # Run every 5 minutes
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
   trigger:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
       - name: Call Supabase Function
+        id: supabase-call
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          curl -X POST https://awpczipxzeurlpmmrzid.supabase.co/functions/v1/auto-cancel-shifts \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+          # Enhance logging and error handling
+          response=$(curl -s -w "%{http_code}" \
+            -X POST ${{ secrets.SUPABASE_URL }}/functions/v1/auto-cancel-shifts \
+            -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
             -H "Content-Type: application/json" \
-            -d '{}'
+            -d '{}')
+          
+          http_code=$(echo "$response" | tail -c 4)
+          body=$(echo "$response" | head -c -4)
+          
+          echo "HTTP Status Code: $http_code"
+          echo "Response Body: $body"
+          
+          if [ "$http_code" -ne 200 ]; then
+            echo "::error::Function call failed with status code $http_code"
+            echo "::error::Response body: $body"
+            exit 1
+          fi
+
+      - name: Notify on Failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'Auto-Cancel Function Failed',
+              body: 'The scheduled auto-cancel job failed. Please investigate.'
+            })
+
+      - name: Log Success
+        if: success()
+        run: echo "Auto-cancel function executed successfully at $(date)"
